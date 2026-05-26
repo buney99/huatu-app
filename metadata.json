@@ -1,0 +1,5 @@
+{
+  "name": "畫畫 3D 立體圖",
+  "description": "一款類似 SketchUp 的 Web 應用程式，供工廠總務使用，可透過簡單的繪圖工具和 AI 輔助快速繪製、拉伸並視覺化 3D 空間佈局。",
+  "requestFramePermissions": []
+}
