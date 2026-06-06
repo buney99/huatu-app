@@ -545,7 +545,7 @@ const SimpleLine: React.FC<{ points: (THREE.Vector3 | [number, number, number])[
         if (ref.current) {
             ref.current.renderOrder = renderOrder;
         }
-    });
+    }, [dashed, renderOrder]);
 
     return (
         <line ref={ref as any} onPointerDown={onPointerDown as any}>
@@ -1619,7 +1619,7 @@ const DoorShapeItem: React.FC<DoorShapeItemProps> = ({
             scale={[shape.scale[0], 1, shape.scale[0]]}
             onClick={(e) => { if (tool === ToolType.SELECT || tool === ToolType.SCALE) handleSelect(e); }}
             onPointerDown={(e) => {
-                if (tool === ToolType.ERASER) return;
+                if (tool === ToolType.ERASER) { e.stopPropagation(); removeShape(shape.id); return; }
                 else if (tool === ToolType.SELECT) { if (!isSelected) handleSelect(e); handlePointerDown(e); }
                 else if (tool === ToolType.ROTATE) rotateHandlers.handleClick(e);
             }}
@@ -1668,17 +1668,30 @@ const ImageShapeItem: React.FC<ImageShapeItemProps> = ({
 }) => {
     const textureLoader = useMemo(() => new THREE.TextureLoader(), []);
     const [texture, setTexture] = useState<THREE.Texture | null>(null);
+    const currentTextureRef = useRef<THREE.Texture | null>(null);
 
     useEffect(() => {
+        let cancelled = false;
         if (shape.imageUrl) {
             textureLoader.load(shape.imageUrl, (tex) => {
+                if (cancelled) { tex.dispose(); return; }
                 tex.colorSpace = THREE.SRGBColorSpace;
+                if (currentTextureRef.current) currentTextureRef.current.dispose();
+                currentTextureRef.current = tex;
                 setTexture(tex);
             });
         } else {
+            if (currentTextureRef.current) { currentTextureRef.current.dispose(); currentTextureRef.current = null; }
             setTexture(null);
         }
+        return () => { cancelled = true; };
     }, [shape.imageUrl, textureLoader]);
+
+    useEffect(() => {
+        return () => {
+            if (currentTextureRef.current) { currentTextureRef.current.dispose(); currentTextureRef.current = null; }
+        };
+    }, []);
 
     const { groupRef, handlePointerDown } = useShapeDrag(
         shape, shapes, isSelected, tool, updateShapes, setDraggingState,
@@ -1780,6 +1793,168 @@ const WideLineSegment: React.FC<{
     );
 };
 
+interface TextShapeItemProps {
+    shape: IShape;
+    isSelected: boolean;
+    tool: ToolType;
+    shapes: IShape[];
+    updateShapes: (updates: { id: string; changes: Partial<IShape> }[]) => void;
+    setDraggingState: (v: boolean) => void;
+    selectedIds: string[];
+    shapeRefs: React.MutableRefObject<Record<string, THREE.Group | null>>;
+    setAlignmentLines: (lines: AlignmentLine[]) => void;
+    setSnapInfo: (snap: SnapResult | null) => void;
+    setMeasurement: (val: string) => void;
+    onShapeRef: (id: string, ref: THREE.Group | null) => void;
+    selectShape: (id: string, multi?: boolean) => void;
+    removeShape: (id: string) => void;
+    rotateHandlers: { handleClick: (e: ThreeEvent<MouseEvent>) => void };
+    guideLines: IGuideLine[];
+}
+
+const TextShapeItem: React.FC<TextShapeItemProps> = ({
+    shape, isSelected, tool, shapes, updateShapes, setDraggingState,
+    selectedIds, shapeRefs, setAlignmentLines, setSnapInfo, setMeasurement,
+    onShapeRef, selectShape, removeShape, rotateHandlers, guideLines,
+}) => {
+    const { groupRef, handlePointerDown, basePoint } = useShapeDrag(
+        shape, shapes, isSelected, tool, updateShapes, setDraggingState,
+        selectedIds, shapeRefs, setAlignmentLines, setSnapInfo, setMeasurement, guideLines
+    );
+    useLayoutEffect(() => {
+        onShapeRef(shape.id, groupRef.current);
+        return () => onShapeRef(shape.id, null);
+    }, [onShapeRef, shape.id]);
+    const handleSelect = useCallback((e: ThreeEvent<MouseEvent>) => {
+        e.stopPropagation();
+        selectShape(shape.id, e.nativeEvent.ctrlKey || e.nativeEvent.metaKey || e.nativeEvent.shiftKey);
+    }, [selectShape, shape.id]);
+
+    return (
+        <group
+            ref={groupRef}
+            position={shape.position || [0,0,0]}
+            rotation={shape.rotation || [0,0,0]}
+            scale={shape.scale || [1,1,1]}
+            onClick={(e) => { if (tool === ToolType.SELECT || tool === ToolType.SCALE) handleSelect(e); }}
+            onPointerDown={(e) => {
+                if (tool === ToolType.ERASER) return;
+                else if (tool === ToolType.SELECT) { if (!isSelected) handleSelect(e); handlePointerDown(e); }
+                else if (tool === ToolType.ROTATE) rotateHandlers.handleClick(e);
+            }}
+        >
+            {basePoint && (
+                <mesh position={[basePoint.x - (shape.position?.[0] || 0), basePoint.y - (shape.position?.[1] || 0), basePoint.z - (shape.position?.[2] || 0)]}>
+                    <sphereGeometry args={[0.03, 16, 16]} />
+                    <meshBasicMaterial color="#ff0000" transparent opacity={0.6} depthTest={false} />
+                </mesh>
+            )}
+            <Text
+                fontSize={shape.fontSize || 0.5}
+                color={shape.color}
+                anchorX="center"
+                anchorY="middle"
+                outlineWidth={isSelected ? 0.02 : 0}
+                outlineColor="#3b82f6"
+            >
+                {shape.content || 'Text'}
+            </Text>
+        </group>
+    );
+};
+
+interface LineShapeItemProps {
+    shape: IShape;
+    isSelected: boolean;
+    tool: ToolType;
+    shapes: IShape[];
+    updateShapes: (updates: { id: string; changes: Partial<IShape> }[]) => void;
+    setDraggingState: (v: boolean) => void;
+    selectedIds: string[];
+    shapeRefs: React.MutableRefObject<Record<string, THREE.Group | null>>;
+    setAlignmentLines: (lines: AlignmentLine[]) => void;
+    setSnapInfo: (snap: SnapResult | null) => void;
+    setMeasurement: (val: string) => void;
+    onShapeRef: (id: string, ref: THREE.Group | null) => void;
+    selectShape: (id: string, multi?: boolean) => void;
+    removeShape: (id: string) => void;
+    rotateHandlers: { handleClick: (e: ThreeEvent<MouseEvent>) => void };
+    guideLines: IGuideLine[];
+}
+
+const LineShapeItem: React.FC<LineShapeItemProps> = ({
+    shape, isSelected, tool, shapes, updateShapes, setDraggingState,
+    selectedIds, shapeRefs, setAlignmentLines, setSnapInfo, setMeasurement,
+    onShapeRef, selectShape, removeShape, rotateHandlers, guideLines,
+}) => {
+    const { groupRef, handlePointerDown } = useShapeDrag(
+        shape, shapes, isSelected, tool, updateShapes, setDraggingState,
+        selectedIds, shapeRefs, setAlignmentLines, setSnapInfo, setMeasurement
+    );
+    useLayoutEffect(() => {
+        onShapeRef(shape.id, groupRef.current);
+        return () => onShapeRef(shape.id, null);
+    }, [onShapeRef, shape.id]);
+    const handleSelect = useCallback((e: ThreeEvent<MouseEvent>) => {
+        e.stopPropagation();
+        selectShape(shape.id, e.nativeEvent.ctrlKey || e.nativeEvent.metaKey || e.nativeEvent.shiftKey);
+    }, [selectShape, shape.id]);
+
+    if (shape.points.length < 2) return null;
+
+    const points = shape.points.map(p => new THREE.Vector3(p.x, p.y, p.z));
+    const position = shape.position || [0,0,0];
+    const rotation = shape.rotation || [0,0,0];
+    const scale = shape.scale || [1,1,1];
+
+    if (shape.lineWidth && shape.lineWidth > 0) {
+        const halfWidth = shape.lineWidth / 2;
+        return (
+            <group
+                ref={groupRef} position={position} rotation={rotation} scale={scale}
+                onClick={(e) => { if (tool === ToolType.SELECT || tool === ToolType.SCALE) handleSelect(e); }}
+                onPointerDown={(e) => {
+                    if (tool === ToolType.ERASER) return;
+                    else if (tool === ToolType.SELECT) { if (!isSelected) handleSelect(e); handlePointerDown(e); }
+                    else if (tool === ToolType.ROTATE) rotateHandlers.handleClick(e);
+                }}
+            >
+                {points.map((p, i) => {
+                    if (i === 0) return null;
+                    return (
+                        <WideLineSegment key={i} p1={points[i - 1]} p2={p} halfWidth={halfWidth}
+                            color={shape.color || '#cccccc'} isSelected={isSelected} />
+                    );
+                })}
+                {points.map((p, i) => {
+                    if (i === 0 || i === points.length - 1) return null;
+                    return (
+                        <mesh key={`joint-${i}`} rotation={[-Math.PI / 2, 0, 0]} position={[p.x, 0.01, p.z]}>
+                            <circleGeometry args={[halfWidth, 16]} />
+                            <meshStandardMaterial color={shape.color || '#cccccc'} side={THREE.DoubleSide}
+                                emissive={isSelected ? '#3b82f6' : '#000000'} emissiveIntensity={isSelected ? 0.2 : 0} />
+                        </mesh>
+                    );
+                })}
+            </group>
+        );
+    }
+
+    return (
+        <group
+            ref={groupRef} position={position} rotation={rotation} scale={scale}
+            onClick={(e) => { if (tool === ToolType.SELECT || tool === ToolType.SCALE) handleSelect(e); }}
+            onPointerDown={(e) => {
+                if (tool === ToolType.ERASER) return;
+                else if (tool === ToolType.SELECT) { if (!isSelected) handleSelect(e); handlePointerDown(e); }
+                else if (tool === ToolType.ROTATE) rotateHandlers.handleClick(e);
+            }}
+        >
+            <SimpleLine points={points} color={isSelected ? '#3b82f6' : 'black'} lineWidth={2} />
+        </group>
+    );
+};
+
 const ShapeRenderer = React.memo(({
     shape, isSelected, isDraggingTop, dragScaleY, pushPullHandlers, drawingHandlers,
     rotateHandlers, setDraggingState, onShapeRef, shapeRefs, setAlignmentLines,
@@ -1864,136 +2039,31 @@ const ShapeRenderer = React.memo(({
     }
 
     if (shape.type === 'text') {
-        const { groupRef, handlePointerDown, basePoint } = useShapeDrag(
-            shape, shapes, isSelected, tool, updateShapes, setDraggingState,
-            selectedIds, shapeRefs, setAlignmentLines, setSnapInfo, setMeasurement, guideLines
-        );
-        useLayoutEffect(() => { 
-            onShapeRef(shape.id, groupRef.current); 
-            return () => onShapeRef(shape.id, null); 
-        }, [onShapeRef, shape.id]);
         return (
-            <group
-                ref={groupRef}
-                position={shape.position || [0,0,0]}
-                rotation={shape.rotation || [0,0,0]}
-                scale={shape.scale || [1,1,1]}
-                onClick={(e) => { 
-                    if (tool === ToolType.SELECT || tool === ToolType.SCALE) handleSelect(e);
-                }}
-                onPointerDown={(e) => {
-                     if (tool === ToolType.ERASER) return;
-                     else if (tool === ToolType.SELECT) { if (!isSelected) handleSelect(e); handlePointerDown(e); }
-                     else if (tool === ToolType.ROTATE) rotateHandlers.handleClick(e);
-                }}
-            >
-                {basePoint && (
-                    <mesh position={[basePoint.x - (shape.position?.[0] || 0), basePoint.y - (shape.position?.[1] || 0), basePoint.z - (shape.position?.[2] || 0)]}>
-                        <sphereGeometry args={[0.03, 16, 16]} />
-                        <meshBasicMaterial color="#ff0000" transparent opacity={0.6} depthTest={false} />
-                    </mesh>
-                )}
-                <Text
-                    fontSize={shape.fontSize || 0.5}
-                    color={shape.color}
-                    anchorX="center"
-                    anchorY="middle"
-                    outlineWidth={isSelected ? 0.02 : 0}
-                    outlineColor="#3b82f6"
-                >
-                    {shape.content || 'Text'}
-                </Text>
-            </group>
+            <TextShapeItem
+                shape={shape} isSelected={isSelected} tool={tool} shapes={shapes}
+                updateShapes={updateShapes} setDraggingState={setDraggingState}
+                selectedIds={selectedIds} shapeRefs={shapeRefs}
+                setAlignmentLines={setAlignmentLines} setSnapInfo={setSnapInfo}
+                setMeasurement={setMeasurement} onShapeRef={onShapeRef}
+                selectShape={selectShape} removeShape={removeShape}
+                rotateHandlers={rotateHandlers} guideLines={guideLines}
+            />
         );
     }
     
     if (shape.type === 'line') {
-         if (shape.points.length < 2) return null;
-         
-         const points = shape.points.map(p => new THREE.Vector3(p.x, p.y, p.z));
-         
-         const { groupRef, handlePointerDown, basePoint } = useShapeDrag(
-             shape, shapes, isSelected, tool, updateShapes, setDraggingState, 
-             selectedIds, shapeRefs, setAlignmentLines, setSnapInfo, setMeasurement
-         );
-         
-         useLayoutEffect(() => { 
-             onShapeRef(shape.id, groupRef.current); 
-             return () => onShapeRef(shape.id, null); 
-         }, [onShapeRef, shape.id]);
-
-         const position = shape.position || [0,0,0];
-         const rotation = shape.rotation || [0,0,0];
-         const scale = shape.scale || [1,1,1];
-
-         if (shape.lineWidth && shape.lineWidth > 0) {
-             const halfWidth = shape.lineWidth / 2;
-             
-             return (
-                 <group 
-                    ref={groupRef}
-                    position={position}
-                    rotation={rotation}
-                    scale={scale}
-                    onClick={(e) => { 
-                        if (tool === ToolType.SELECT || tool === ToolType.SCALE) handleSelect(e);
-                    }}
-                    onPointerDown={(e) => {
-                         if (tool === ToolType.ERASER) return;
-                         else if (tool === ToolType.SELECT) { if (!isSelected) handleSelect(e); handlePointerDown(e); }
-                         else if (tool === ToolType.ROTATE) rotateHandlers.handleClick(e);
-                    }}
-                 >
-                    {points.map((p, i) => {
-                        if (i === 0) return null;
-                        return (
-                            <WideLineSegment
-                                key={i}
-                                p1={points[i - 1]}
-                                p2={p}
-                                halfWidth={halfWidth}
-                                color={shape.color || '#cccccc'}
-                                isSelected={isSelected}
-                            />
-                        );
-                    })}
-                    {/* Add joints (circles) to make corners smooth */}
-                    {points.map((p, i) => {
-                        if (i === 0 || i === points.length - 1) return null;
-                        return (
-                            <mesh key={`joint-${i}`} rotation={[-Math.PI / 2, 0, 0]} position={[p.x, 0.01, p.z]}>
-                                <circleGeometry args={[halfWidth, 16]} />
-                                <meshStandardMaterial 
-                                    color={shape.color || '#cccccc'} 
-                                    side={THREE.DoubleSide}
-                                    emissive={isSelected ? '#3b82f6' : '#000000'}
-                                    emissiveIntensity={isSelected ? 0.2 : 0}
-                                />
-                            </mesh>
-                        );
-                    })}
-                 </group>
-             );
-         }
-
-         return (
-             <group 
-                ref={groupRef}
-                position={position}
-                rotation={rotation}
-                scale={scale}
-                onClick={(e) => { 
-                    if (tool === ToolType.SELECT || tool === ToolType.SCALE) handleSelect(e);
-                }}
-                onPointerDown={(e) => {
-                     if (tool === ToolType.ERASER) return;
-                     else if (tool === ToolType.SELECT) { if (!isSelected) handleSelect(e); handlePointerDown(e); }
-                     else if (tool === ToolType.ROTATE) rotateHandlers.handleClick(e);
-                }}
-             >
-                <SimpleLine points={points} color={isSelected ? '#3b82f6' : 'black'} lineWidth={2} />
-             </group>
-         );
+        return (
+            <LineShapeItem
+                shape={shape} isSelected={isSelected} tool={tool} shapes={shapes}
+                updateShapes={updateShapes} setDraggingState={setDraggingState}
+                selectedIds={selectedIds} shapeRefs={shapeRefs}
+                setAlignmentLines={setAlignmentLines} setSnapInfo={setSnapInfo}
+                setMeasurement={setMeasurement} onShapeRef={onShapeRef}
+                selectShape={selectShape} removeShape={removeShape}
+                rotateHandlers={rotateHandlers} guideLines={guideLines}
+            />
+        );
     }
     
     if (!shape.points || shape.points.length < 3) return null;
@@ -2709,20 +2779,20 @@ const usePushPullManager = () => {
                     if (Math.abs(axis.y) > 0.9) up.set(1, 0, 0);
                     planeNormal = up.cross(axis).cross(axis).normalize();
                 }
-                const dragPlane = new THREE.Plane().setFromNormalAndCoplanarPoint(planeNormal, state.dragStartPoint); 
-                const target = new THREE.Vector3(); 
-                raycaster.ray.intersectPlane(dragPlane, target); 
-                if (target) { 
-                    const diff = target.clone().sub(state.dragStartPoint); 
-                    const deltaHeight = diff.dot(axis); 
+                const dragPlane = new THREE.Plane().setFromNormalAndCoplanarPoint(planeNormal, state.dragStartPoint);
+                const target = new THREE.Vector3();
+                const hitTop = raycaster.ray.intersectPlane(dragPlane, target);
+                if (hitTop) {
+                    const diff = target.clone().sub(state.dragStartPoint);
+                    const deltaHeight = diff.dot(axis);
                     let newHeight = state.originalHeight + deltaHeight;
                     if (!shape.parentId) {
                         newHeight = Math.max(0.01, newHeight);
                     }
-                    setPPState(prev => ({ ...prev, dragHeight: newHeight })); 
-                    setMeasurement(`高度: ${formatValue(newHeight)}`); 
-                } 
-            } else if (state.mode === 'side') { 
+                    setPPState(prev => ({ ...prev, dragHeight: newHeight }));
+                    setMeasurement(`高度: ${formatValue(newHeight)}`);
+                }
+            } else if (state.mode === 'side') {
                 const axis = state.normal.clone().normalize();
                 const camDir = camera.getWorldDirection(new THREE.Vector3());
                 let planeNormal = camDir.clone().cross(axis).cross(axis).normalize();
@@ -2731,10 +2801,10 @@ const usePushPullManager = () => {
                     if (Math.abs(axis.y) > 0.9) up.set(1, 0, 0);
                     planeNormal = up.cross(axis).cross(axis).normalize();
                 }
-                const dragPlane = new THREE.Plane().setFromNormalAndCoplanarPoint(planeNormal, state.dragStartPoint); 
-                const target = new THREE.Vector3(); 
-                raycaster.ray.intersectPlane(dragPlane, target); 
-                if (target) { 
+                const dragPlane = new THREE.Plane().setFromNormalAndCoplanarPoint(planeNormal, state.dragStartPoint);
+                const target = new THREE.Vector3();
+                const hitSide = raycaster.ray.intersectPlane(dragPlane, target);
+                if (hitSide) {
                     const diff = target.clone().sub(state.dragStartPoint); 
                     const projection = diff.dot(axis); 
                     const moveVectorWorld = axis.clone().multiplyScalar(projection); 
@@ -2771,8 +2841,9 @@ const usePushPullManager = () => {
              if(!shape) return;
              const raycaster = new THREE.Raycaster();
              raycaster.setFromCamera(new THREE.Vector2((e.clientX / gl.domElement.clientWidth) * 2 - 1, -(e.clientY / gl.domElement.clientHeight) * 2 + 1), camera);
-             let startPoint = new THREE.Vector3();
-             if (state.mode === 'top') { 
+             const startPoint = new THREE.Vector3();
+             let startHit = false;
+             if (state.mode === 'top') {
                  const axis = new THREE.Vector3(0, 1, 0).applyEuler(new THREE.Euler(...(shape.rotation || [0,0,0]))).normalize();
                  const camDir = camera.getWorldDirection(new THREE.Vector3());
                  let planeNormal = camDir.clone().cross(axis).cross(axis).normalize();
@@ -2781,9 +2852,9 @@ const usePushPullManager = () => {
                      if (Math.abs(axis.y) > 0.9) up.set(1, 0, 0);
                      planeNormal = up.cross(axis).cross(axis).normalize();
                  }
-                 const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(planeNormal, (e as any).point); 
-                 raycaster.ray.intersectPlane(plane, startPoint); 
-             } else { 
+                 const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(planeNormal, (e as any).point);
+                 startHit = raycaster.ray.intersectPlane(plane, startPoint) !== null;
+             } else {
                  const axis = state.normal.clone().normalize();
                  const camDir = camera.getWorldDirection(new THREE.Vector3());
                  let planeNormal = camDir.clone().cross(axis).cross(axis).normalize();
@@ -2792,9 +2863,10 @@ const usePushPullManager = () => {
                      if (Math.abs(axis.y) > 0.9) up.set(1, 0, 0);
                      planeNormal = up.cross(axis).cross(axis).normalize();
                  }
-                 const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(planeNormal, (e as any).point); 
-                 raycaster.ray.intersectPlane(plane, startPoint); 
+                 const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(planeNormal, (e as any).point);
+                 startHit = raycaster.ray.intersectPlane(plane, startPoint) !== null;
              }
+             if (!startHit) return;
              const originalPoints = shape.points.map(p => ({...p}));
              if (originalPoints.length > 2) {
                  const first = originalPoints[0];
@@ -3396,7 +3468,7 @@ const useDrawingManager = () => {
             setTypedInput('');
         }
 
-    }, [tool, addShape, activeLayerId, drawingNormal, setTool, setMeasurement, snapInfo, shapes, attemptGeometryCut]);
+    }, [tool, addShape, replaceShapes, activeLayerId, drawingNormal, drawingParentId, setTool, setMeasurement, snapInfo, shapes, attemptGeometryCut]);
 
     const handleInputSubmit = useCallback(() => {
         if (!typedInput) return;
@@ -3660,7 +3732,7 @@ const useDrawingManager = () => {
         }
     }, [tool, snapInfo, addPoint, setMeasurement, setDrawPoints, removeGuideLine, removeShape]);
 
-    const handlePointerUp = useCallback((e: ThreeEvent<PointerEvent>) => {
+    const handlePointerUp = useCallback((e: ThreeEvent<PointerEvent> | { nativeEvent: Pick<PointerEvent, 'shiftKey'> }) => {
         if (tool === ToolType.PUSH_PULL || tool === ToolType.ROTATE || tool === ToolType.HAND) return;
         setIsDragging(false);
         
@@ -3886,7 +3958,7 @@ const useDrawingManager = () => {
                 // Let's just create a custom event that handlePointerUp can listen to, or extract the logic.
                 // For now, we can just dispatch a custom event and let handlePointerUp listen to it if we want.
                 // Wait, handlePointerUp is a callback. We can just call it with a mock event.
-                handlePointerUp({ nativeEvent: e } as unknown as ThreeEvent<PointerEvent>);
+                handlePointerUp({ nativeEvent: e });
             }
         };
         if (selectionBox.start) {
@@ -4137,18 +4209,31 @@ const BackgroundImageRenderer: React.FC = () => {
     const textureLoader = useMemo(() => new THREE.TextureLoader(), []);
     const [texture, setTexture] = useState<THREE.Texture | null>(null);
     const [aspectRatio, setAspectRatio] = useState(1);
+    const currentTextureRef = useRef<THREE.Texture | null>(null);
 
     useEffect(() => {
+        let cancelled = false;
         if (backgroundImage) {
             textureLoader.load(backgroundImage, (tex) => {
+                if (cancelled) { tex.dispose(); return; }
                 tex.colorSpace = THREE.SRGBColorSpace;
+                if (currentTextureRef.current) currentTextureRef.current.dispose();
+                currentTextureRef.current = tex;
                 setTexture(tex);
-                setAspectRatio(tex.image.width / tex.image.height);
+                setAspectRatio(tex.image.height > 0 ? tex.image.width / tex.image.height : 1);
             });
         } else {
+            if (currentTextureRef.current) { currentTextureRef.current.dispose(); currentTextureRef.current = null; }
             setTexture(null);
         }
+        return () => { cancelled = true; };
     }, [backgroundImage, textureLoader]);
+
+    useEffect(() => {
+        return () => {
+            if (currentTextureRef.current) { currentTextureRef.current.dispose(); currentTextureRef.current = null; }
+        };
+    }, []);
 
     if (!texture) return null;
 

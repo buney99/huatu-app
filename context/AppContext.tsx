@@ -555,6 +555,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
          };
       });
       
+    // Identify child copies BEFORE mutating parentIds (while idMapping still maps old->new)
+    const childCopyIds = new Set(
+        newShapesToAdd.filter(s => s.parentId && idMapping[s.parentId]).map(s => s.id)
+    );
+
     // Update parentIds for copied children
     newShapesToAdd.forEach(s => {
         if (s.parentId && idMapping[s.parentId]) {
@@ -565,7 +570,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const newShapes = [...shapes, ...newShapesToAdd];
     _commitState(newShapes, layers, guideLines);
     // Select only the top-level copied shapes
-    setSelectedIds(newShapesToAdd.filter(s => !s.parentId || !idMapping[s.parentId]).map(s => s.id));
+    setSelectedIds(newShapesToAdd.filter(s => !childCopyIds.has(s.id)).map(s => s.id));
   }, [_commitState]);
 
   const groupSelected = useCallback(() => {
